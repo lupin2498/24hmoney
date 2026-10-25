@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="description" content="Tổng hợp tin kinh tế từ 24HMoney, tóm tắt và phân tích dưới góc nhìn chuyên gia kinh tế." />
+    <meta name="theme-color" content="#f6f6f3" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)" />
+    <title>Money Insight</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="icons/icon-192.png" />
+    <link rel="stylesheet" href="styles.css" />
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="#/">
+          <img src="icons/icon.svg" alt="" width="32" height="32" />
+          <span>
+            <strong>Money Insight</strong>
+            <small>Tin 24HMoney · Góc nhìn chuyên gia</small>
+          </span>
+        </a>
+        <div class="date-nav" aria-label="Chọn ngày">
+          <button type="button" class="icon-btn" id="prev-day" aria-label="Ngày trước">‹</button>
+          <select id="date-select" aria-label="Ngày"></select>
+          <button type="button" class="icon-btn" id="next-day" aria-label="Ngày sau">›</button>
+        </div>
+      </div>
+      <nav class="tabs" aria-label="Chế độ xem">
+        <a href="#/" data-tab="digest">Bản tin chuyên gia</a>
+        <a href="#/news" data-tab="news">Tin tức</a>
+      </nav>
+    </header>
+
+    <div class="wrap">
+      <div id="banner" class="banner" role="status" hidden></div>
+      <main id="view" tabindex="-1"><p class="loading">Đang tải…</p></main>
+    </div>
+
+    <button type="button" id="refresh-pill" class="refresh-pill" hidden>Có cập nhật mới · Làm mới</button>
+
+    <footer class="footer">
+      <div class="wrap">
+        <p id="status-line" class="status-line"></p>
+        <p class="disclaimer">
+          Ứng dụng không chính thức, tổng hợp tin công khai từ 24HMoney.vn và không liên kết với 24HMoney. Phần tóm tắt và
+          phân tích do AI tạo ra, chỉ mang tính tham khảo, không phải khuyến nghị đầu tư. Hãy đọc bài gốc trước khi ra quyết định.
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>
