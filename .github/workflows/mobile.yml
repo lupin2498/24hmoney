@@ -1,0 +1,184 @@
+name: Mobile apps (APK + IPA)
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Đăng file cài đặt lên GitHub Releases"
+        type: boolean
+        default: true
+  push:
+    branches: [ccr-1cda8e4c-an2zlc]
+    paths:
+      - "mobile/**"
+      - "public/**"
+      - "src/**"
+      - "package-lock.json"
+      - ".github/workflows/mobile.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mobile-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+env:
+  APP_VERSION: "1.0.${{ github.run_number }}"
+  BUILD_NUMBER: "${{ github.run_number }}"
+
+jobs:
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mobile/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Cài thư viện
+        run: |
+          npm ci
+          npm ci --prefix mobile
+
+      - name: Đóng gói giao diện và đồng bộ dự án Android
+        working-directory: mobile
+        run: |
+          node build.mjs
+          npx cap sync android
+
+      - name: Chuẩn bị khóa ký APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          KEYSTORE="$RUNNER_TEMP/release.jks"
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "Dùng khóa ký cố định từ GitHub Secrets."
+            echo "$KEYSTORE_BASE64" | base64 -d > "$KEYSTORE"
+          else
+            echo "::warning::Chưa cấu hình ANDROID_KEYSTORE_* trong Secrets: APK được ký bằng khóa tạm, muốn cập nhật bản sau phải gỡ bản cũ."
+            KEYSTORE_PASSWORD="$(openssl rand -hex 16)"
+            KEY_PASSWORD="$KEYSTORE_PASSWORD"
+            KEY_ALIAS="moneyinsight"
+            echo "::add-mask::$KEYSTORE_PASSWORD"
+            keytool -genkeypair -keystore "$KEYSTORE" -storepass "$KEYSTORE_PASSWORD" -keypass "$KEY_PASSWORD" \
+              -alias "$KEY_ALIAS" -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Money Insight"
+          fi
+          {
+            echo "ANDROID_KEYSTORE_FILE=$KEYSTORE"
+            echo "ANDROID_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "ANDROID_KEY_ALIAS=$KEY_ALIAS"
+            echo "ANDROID_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+      - name: Build APK
+        working-directory: mobile/android
+        run: ./gradlew --no-daemon assembleRelease -PappVersionCode="$BUILD_NUMBER" -PappVersionName="$APP_VERSION"
+
+      - name: Đặt tên file
+        run: |
+          mkdir -p dist
+          cp mobile/android/app/build/outputs/apk/release/app-release.apk "dist/MoneyInsight-$APP_VERSION.apk"
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: dist/*.apk
+          if-no-files-found: error
+
+  ios:
+    name: iOS IPA (chưa ký)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mobile/package-lock.json
+
+      - name: Chọn Xcode mới nhất
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_*.app 2>/dev/null | grep -vi beta | sort -V | tail -1)"
+          if [ -n "$XCODE" ]; then sudo xcode-select -s "$XCODE"; fi
+          xcodebuild -version
+
+      - name: Cài thư viện
+        run: |
+          npm ci
+          npm ci --prefix mobile
+
+      - name: Đóng gói giao diện và đồng bộ dự án iOS
+        working-directory: mobile
+        run: |
+          node build.mjs
+          npx cap sync ios
+
+      - name: Build ứng dụng iOS (không ký)
+        working-directory: mobile/ios/App
+        run: |
+          xcodebuild -project App.xcodeproj -scheme App -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            MARKETING_VERSION="$APP_VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Đóng gói IPA
+        run: |
+          mkdir -p dist/Payload
+          cp -R mobile/ios/App/build/Build/Products/Release-iphoneos/App.app dist/Payload/
+          cd dist && zip -qry "MoneyInsight-$APP_VERSION-unsigned.ipa" Payload && rm -rf Payload && ls -la
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: dist/*.ipa
+          if-no-files-found: error
+
+  release:
+    name: Đăng GitHub Release
+    needs: [android, ios]
+    if: github.event_name == 'workflow_dispatch' && inputs.release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Tạo release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'NOTES'
+          Bộ cài ứng dụng **Money Insight** – tổng hợp tin kinh tế 24HMoney, tóm tắt và phân tích dưới góc nhìn chuyên gia.
+
+          **Android (.apk)**: tải file về điện thoại, mở để cài (cho phép "Cài ứng dụng không rõ nguồn" khi được hỏi).
+
+          **iOS (.ipa, chưa ký)**: Apple không cho cài trực tiếp file chưa ký. Cài bằng Sideloadly hoặc AltStore với Apple ID của bạn (Apple ID miễn phí: phải cài lại sau 7 ngày), hoặc ký bằng tài khoản Apple Developer.
+
+          Lần đầu mở ứng dụng: vào ⚙ Cài đặt, nhập API key của Anthropic để bật tóm tắt và phân tích.
+          NOTES
+          gh release create "v$APP_VERSION" dist/* \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Money Insight $APP_VERSION" --notes-file notes.md

@@ -24,6 +24,8 @@ const state = {
 };
 
 const view = document.getElementById("view");
+// Bản ứng dụng điện thoại cung cấp "máy chủ" chạy ngay trên máy (xem mobile/src/main.js).
+const local = window.MoneyInsightLocal || null;
 
 // ---------- tiện ích ----------
 
@@ -101,6 +103,11 @@ function dayLabel(dateKey, { long = false } = {}) {
 }
 
 async function api(path, options = {}) {
+  if (local) {
+    const { status, body } = await local.request(path, options);
+    if (status >= 400) throw new Error(body?.error || `Lỗi (${status})`);
+    return body;
+  }
   const headers = { Accept: "application/json" };
   if (options.body) headers["Content-Type"] = "application/json";
   const token = storage.get("adminToken");
@@ -168,6 +175,7 @@ function parseRoute() {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(params.get("d") || "") ? params.get("d") : state.status?.today;
   if (parts[0] === "article" && parts[1]) return { name: "article", id: decodeURIComponent(parts[1]), date };
   if (parts[0] === "news") return { name: "news", date };
+  if (parts[0] === "settings" && local) return { name: "settings", date };
   return { name: "digest", date };
 }
 
@@ -196,14 +204,15 @@ function updateChrome(route) {
       h("option", { value: d.date, selected: d.date === route.date }, `${shortDayLabel(d.date)}${d.total ? ` · ${d.total} tin` : ""}`),
     ),
   );
-  select.disabled = route.name === "article";
-  document.getElementById("prev-day").disabled = route.name === "article";
-  document.getElementById("next-day").disabled = route.name === "article" || route.date >= state.status?.today;
+  const detached = route.name === "article" || route.name === "settings";
+  select.disabled = detached;
+  document.getElementById("prev-day").disabled = detached;
+  document.getElementById("next-day").disabled = detached || route.date >= state.status?.today;
 }
 
 function goToDate(date) {
   const route = parseRoute();
-  location.hash = href(route.name === "article" ? "news" : route.name, date).slice(1);
+  location.hash = href(route.name === "digest" ? "digest" : "news", date).slice(1);
 }
 
 document.getElementById("date-select").addEventListener("change", (e) => goToDate(e.target.value));
@@ -227,12 +236,19 @@ function renderStatus() {
   const s = state.status;
   const banner = document.getElementById("banner");
   const messages = [];
-  if (!s.ai.enabled) {
+  if (local?.needsSetup()) {
+    messages.push([
+      "Nhập API key của Anthropic để bật tóm tắt và phân tích chuyên gia. ",
+      h("a", { href: "#/settings" }, "Mở Cài đặt"),
+    ]);
+  } else if (!s.ai.enabled) {
     messages.push("Tính năng AI đang tắt (AI_ENABLED=0): ứng dụng chỉ thu thập tin, không tóm tắt và phân tích.");
   } else if (s.ai.blocked) {
     const hint =
       s.ai.blocked.code === "auth"
-        ? " Thêm ANTHROPIC_API_KEY vào file .env rồi khởi động lại ứng dụng."
+        ? local
+          ? " Kiểm tra lại API key trong Cài đặt."
+          : " Thêm ANTHROPIC_API_KEY vào file .env rồi khởi động lại ứng dụng."
         : s.ai.blocked.code === "billing"
           ? " Nạp thêm tín dụng tại console.anthropic.com, ứng dụng sẽ tự thử lại sau 30 phút."
           : "";
@@ -308,7 +324,8 @@ async function render() {
   updateChrome(route);
   document.getElementById("refresh-pill").hidden = true;
   try {
-    if (route.name === "article") await renderArticle(route.id);
+    if (route.name === "settings") renderSettings();
+    else if (route.name === "article") await renderArticle(route.id);
     else if (route.name === "news") await renderNews(route.date);
     else await renderDigest(route.date);
   } catch (err) {
@@ -405,7 +422,9 @@ async function renderDigest(date) {
           {},
           state.status.ai.enabled
             ? `Bản tin được lập tự động vào ${times} khi có đủ tin đã phân tích. Bạn cũng có thể lập ngay.`
-            : "Cần bật AI (ANTHROPIC_API_KEY) để lập bản tin.",
+            : local
+              ? "Nhập API key của Anthropic trong Cài đặt để lập bản tin."
+              : "Cần bật AI (ANTHROPIC_API_KEY) để lập bản tin.",
         ),
         regenerate(),
       ),
@@ -605,7 +624,7 @@ function fold(text) {
   return String(text || "")
     .replace(/[đĐ]/g, "d")
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
 }
 
@@ -642,7 +661,22 @@ async function renderArticle(id) {
     h("h1", { class: "article-title" }, a.title),
     h("p", { class: "muted small" }, origin),
     /^https?:\/\//.test(a.url || "")
-      ? h("a", { class: "btn btn-secondary source-link", href: a.url, target: "_blank", rel: "noopener noreferrer" }, "Đọc bài gốc trên 24HMoney ↗")
+      ? h(
+          "a",
+          {
+            class: "btn btn-secondary source-link",
+            href: a.url,
+            target: "_blank",
+            rel: "noopener noreferrer",
+            onclick: local
+              ? (e) => {
+                  e.preventDefault();
+                  local.openExternal(a.url);
+                }
+              : null,
+          },
+          "Đọc bài gốc trên 24HMoney ↗",
+        )
       : null,
   );
 
@@ -741,6 +775,46 @@ async function renderArticle(id) {
   window.scrollTo(0, 0);
 }
 
+function renderSettings() {
+  const s = local.getSettings();
+  const field = (label, control, hint) =>
+    h("label", { class: "field" }, h("span", { class: "field-label" }, label), control, hint ? h("span", { class: "field-hint" }, hint) : null);
+
+  const apiKey = h("input", { type: "password", value: s.apiKey, autocomplete: "off", spellcheck: "false", placeholder: "sk-ant-..." });
+  const model = h("select", {}, ...local.models.map((m) => h("option", { value: m.id, selected: m.id === s.model }, m.label)));
+  const dailyLimit = h("input", { type: "number", min: "1", max: "500", inputmode: "numeric", value: String(s.dailyLimit) });
+  const crawlInterval = h("input", { type: "number", min: "10", max: "240", inputmode: "numeric", value: String(s.crawlInterval) });
+
+  const save = actionButton("Lưu cài đặt", async () => {
+    await local.saveSettings({
+      apiKey: apiKey.value,
+      model: model.value,
+      dailyLimit: dailyLimit.value,
+      crawlInterval: crawlInterval.value,
+    });
+    toast("Đã lưu cài đặt.");
+    await loadStatus();
+    location.hash = "/";
+  });
+
+  view.replaceChildren(
+    h("h1", { class: "page-title" }, "Cài đặt"),
+    h(
+      "section",
+      { class: "card form" },
+      field(
+        "API key của Anthropic",
+        apiKey,
+        "Tạo tại console.anthropic.com → API Keys. Key chỉ được lưu trên điện thoại này và chỉ dùng để gọi Claude.",
+      ),
+      field("Model phân tích", model, "Opus cho phân tích sâu nhất; Sonnet/Haiku rẻ hơn."),
+      field("Số tin tự động phân tích mỗi ngày", dailyLimit, "Mỗi tin là một lượt gọi API (tính phí vào tài khoản Anthropic của bạn)."),
+      field("Chu kỳ cập nhật tin khi mở ứng dụng (phút)", crawlInterval),
+      h("div", { class: "actions" }, save),
+    ),
+  );
+}
+
 // ---------- khởi động ----------
 
 window.addEventListener("hashchange", () => {
@@ -750,6 +824,7 @@ window.addEventListener("hashchange", () => {
 render();
 setInterval(poll, 60e3);
 
-if ("serviceWorker" in navigator) {
+if (local) document.getElementById("settings-link").hidden = false;
+else if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
 }

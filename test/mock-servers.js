@@ -2,9 +2,25 @@
 import http from "node:http";
 import { SAMPLE_ANALYSIS, sampleDigest } from "./helpers.js";
 
+// Cho phép gọi từ trình duyệt (kiểm thử bản điện thoại chạy trong Chromium).
+function withCors(handler) {
+  return (req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, {
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": req.headers["access-control-request-headers"] || "*",
+        "Access-Control-Max-Age": "600",
+      });
+      return res.end();
+    }
+    return handler(req, res);
+  };
+}
+
 export function listen(handler) {
   return new Promise((resolve) => {
-    const server = http.createServer(handler);
+    const server = http.createServer(withCors(handler));
     server.listen(0, "127.0.0.1", () => resolve({ server, origin: `http://127.0.0.1:${server.address().port}` }));
   });
 }

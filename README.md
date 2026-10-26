@@ -56,6 +56,29 @@ npm run digest                # lập bản tin chuyên gia cho hôm nay
 npm run digest -- 2026-10-24  # lập bản tin cho một ngày cụ thể
 ```
 
+## Ứng dụng điện thoại (Android APK / iOS)
+
+Thư mục [`mobile/`](mobile) đóng gói cùng giao diện và logic thành ứng dụng **chạy độc lập trên điện thoại** (Capacitor): không cần máy chủ, ứng dụng tự lấy tin từ 24HMoney và gọi Claude ngay trên máy. Dữ liệu lưu trong máy, giữ 14 ngày.
+
+- **Tải bộ cài**: mục [Releases](../../releases) của repo có file `MoneyInsight-<phiên bản>.apk` (Android) và `MoneyInsight-<phiên bản>-unsigned.ipa` (iOS).
+- **Android**: tải APK về điện thoại, mở để cài (cho phép *Cài ứng dụng không rõ nguồn* khi được hỏi).
+- **iOS**: file IPA chưa được ký, Apple không cho cài trực tiếp. Cài bằng [Sideloadly](https://sideloadly.io) hoặc [AltStore](https://altstore.io) với Apple ID của bạn (Apple ID miễn phí: phải cài lại sau 7 ngày), hoặc ký bằng tài khoản Apple Developer.
+- **Lần đầu mở**: vào ⚙ *Cài đặt*, nhập API key của Anthropic, chọn model và số tin tự phân tích mỗi ngày. Key chỉ lưu trên điện thoại. Ứng dụng cập nhật tin khi đang mở (mặc định 30 phút/lần và mỗi lần mở lại).
+
+Bộ cài được build tự động bằng GitHub Actions ([`.github/workflows/mobile.yml`](.github/workflows/mobile.yml)): mỗi lần đẩy code thay đổi `mobile/`, `public/` hoặc `src/` sẽ build lại APK và IPA (tải ở trang Actions); chạy thủ công workflow *Mobile apps (APK + IPA)* để đăng một Release mới.
+
+Khóa ký APK: nếu không cấu hình, mỗi bản build dùng một khóa tạm nên muốn cập nhật phải gỡ bản cũ. Để cập nhật trực tiếp, tạo keystore một lần và thêm vào *Settings → Secrets and variables → Actions*: `ANDROID_KEYSTORE_BASE64` (nội dung file `.jks` mã hoá base64), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`.
+
+Build trên máy cá nhân:
+
+```bash
+npm install && npm install --prefix mobile
+cd mobile
+node build.mjs && npx cap sync      # đóng gói giao diện vào dự án Android/iOS
+npx cap open android                # mở Android Studio để chạy/build
+npx cap open ios                    # mở Xcode (cần macOS)
+```
+
 ## Cấu hình chính (file `.env`)
 
 | Biến | Mặc định | Ý nghĩa |
@@ -98,9 +121,11 @@ src/
   crawler/            thu thập tin: http, robots.txt, phát hiện link, phân tích trang bài
   ai/                 prompt, schema JSON và lời gọi Claude API
   pipeline.js         lịch quét, hàng đợi phân tích, lập bản tin
-  store.js            lưu trữ JSON theo ngày
-  server.js           REST API + phục vụ giao diện
-public/               giao diện web/PWA (HTML, CSS, JS thuần)
+  store.js            kho dữ liệu theo ngày (storage/: lưu file JSON trên máy chủ)
+  api.js              xử lý API dùng chung cho máy chủ và app điện thoại
+  server.js           máy chủ web Express + phục vụ giao diện
+public/               giao diện web/PWA (HTML, CSS, JS thuần), dùng chung cho app điện thoại
+mobile/               ứng dụng Android/iOS (Capacitor): src/ (khởi động, IndexedDB), android/, ios/
 test/                 kiểm thử (node:test)
 ```
 

@@ -1,0 +1,23 @@
+{
+  "name": "money-insight-mobile",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Ứng dụng Android/iOS của Money Insight (chạy độc lập trên điện thoại).",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "sync": "node build.mjs && cap sync"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/browser": "^8.0.5",
+    "@capacitor/core": "^8.5.3",
+    "@capacitor/ios": "^8.5.3",
+    "@capacitor/preferences": "^8.0.1"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^8.5.3",
+    "esbuild": "^0.28.2"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "appId": "io.github.lupin2498.moneyinsight",
+  "appName": "Money Insight",
+  "webDir": "www",
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    },
+    "SystemBars": {
+      "insetsHandling": "css"
+    }
+  }
+}

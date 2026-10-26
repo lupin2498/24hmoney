@@ -22,6 +22,7 @@ export class Pipeline {
     this.digesting = new Map();
     this.digestAttempts = new Map();
     this.timers = [];
+    this.stopped = false;
   }
 
   start() {
@@ -37,6 +38,7 @@ export class Pipeline {
   }
 
   stop() {
+    this.stopped = true;
     this.timers.forEach(clearInterval);
     this.timers = [];
   }
@@ -112,7 +114,7 @@ export class Pipeline {
   // ---------- Phân tích AI ----------
 
   pumpAi() {
-    if (!this.analyst || this.ai.blocked) return;
+    if (!this.analyst || this.ai.blocked || this.stopped) return;
     while (this.ai.running < this.cfg.ai.concurrency) {
       const next = this.#nextForAnalysis();
       if (!next) break;

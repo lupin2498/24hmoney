@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { loadConfig } from "../src/config.js";
 import { Store } from "../src/store.js";
+import { FileBackend } from "../src/storage/file-backend.js";
 import { Pipeline } from "../src/pipeline.js";
 import { AiError } from "../src/ai/analyst.js";
 import { createApp } from "../src/server.js";
@@ -75,7 +76,7 @@ class FakeAnalyst {
 async function setup({ env = {}, articles } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "money-insight-"));
   const config = loadConfig({ DATA_DIR: dir, ...env });
-  const store = await new Store(dir, { logger: quiet, now: () => NOW }).load();
+  const store = await new Store(new FileBackend(dir), { logger: quiet, now: () => NOW }).load();
   const crawler = new FakeCrawler(articles || [makeArticle(3, 1), makeArticle(2, 2), makeArticle(1, 80)]);
   const analyst = new FakeAnalyst();
   const pipeline = new Pipeline({ config, store, crawler, analyst, logger: quiet, now: () => NOW });
@@ -109,7 +110,7 @@ test("quét tin → lưu bài mới, bỏ bài cũ → phân tích → dọn n�
 
   // Dữ liệu được ghi xuống đĩa và đọc lại được.
   await store.flush();
-  const reloaded = await new Store(dir, { logger: quiet, now: () => NOW }).load();
+  const reloaded = await new Store(new FileBackend(dir), { logger: quiet, now: () => NOW }).load();
   assert.equal(reloaded.get("c1a3").analysis.category, "Vĩ mô");
   assert.equal(reloaded.has("https://24hmoney.vn/news/tin-1-c1a1.html"), true);
 });

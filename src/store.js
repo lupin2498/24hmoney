@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { addDays, createLogger, vnDateKey } from "./util.js";
 
 const SEEN_TTL_MS = 7 * 86400e3;
@@ -11,7 +9,7 @@ export function fold(text) {
   return String(text || "")
     .replace(/[đĐ]/g, "d")
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
 }
 
@@ -23,13 +21,17 @@ export function publicArticle(a) {
   return rest;
 }
 
+const KINDS = ["articles", "digests"];
+const isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+
 /**
- * Lưu trữ đơn giản bằng file JSON: mỗi ngày một file bài viết, một file bản tin,
- * cộng thêm meta.json (lần quét gần nhất, thống kê token, URL đã bỏ qua).
+ * Kho dữ liệu: mỗi ngày một bản ghi bài viết và một bản ghi bản tin, cộng thêm meta
+ * (lần quét gần nhất, thống kê token, URL đã bỏ qua). Việc đọc/ghi thật do backend đảm nhận:
+ * file JSON trên máy chủ (FileBackend) hoặc IndexedDB trên điện thoại.
  */
 export class Store {
-  constructor(dir, { retentionDays = 30, logger = createLogger("store"), now = () => new Date() } = {}) {
-    this.dir = dir;
+  constructor(backend, { retentionDays = 30, logger = createLogger("store"), now = () => new Date() } = {}) {
+    this.backend = backend;
     this.now = now;
     this.retentionDays = retentionDays;
     this.log = logger;
@@ -39,26 +41,25 @@ export class Store {
     this.meta = { lastCrawl: null, usage: {}, seen: {} };
     this.dirtyDays = new Set();
     this.dirtyDigests = new Set();
+    this.removed = new Set();
     this.metaDirty = false;
     this.saveTimer = null;
     this.writing = Promise.resolve();
   }
 
-  #file(kind, day) {
-    return path.join(this.dir, kind, `${day}.json`);
-  }
-
   async load() {
-    await fs.mkdir(path.join(this.dir, "articles"), { recursive: true });
-    await fs.mkdir(path.join(this.dir, "digests"), { recursive: true });
+    await this.backend.init?.();
     const oldest = addDays(vnDateKey(this.now()), -this.retentionDays);
 
-    for (const kind of ["articles", "digests"]) {
-      for (const name of await fs.readdir(path.join(this.dir, kind))) {
-        const day = name.replace(/\.json$/, "");
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || day < oldest) continue;
+    for (const kind of KINDS) {
+      for (const day of await this.backend.listDays(kind)) {
+        if (!isDay(day)) continue;
+        if (day < oldest) {
+          await this.backend.remove(kind, day);
+          continue;
+        }
         try {
-          const data = JSON.parse(await fs.readFile(this.#file(kind, day), "utf8"));
+          const data = JSON.parse(await this.backend.read(kind, day));
           if (kind === "digests") {
             this.digests.set(day, data);
             continue;
@@ -70,14 +71,15 @@ export class Store {
             this.byUrl.set(a.url, a.id);
           }
         } catch (err) {
-          this.log.warn(`Không đọc được ${kind}/${name}:`, err.message);
+          this.log.warn(`Không đọc được ${kind}/${day}:`, err.message);
         }
       }
     }
     try {
-      this.meta = { ...this.meta, ...JSON.parse(await fs.readFile(path.join(this.dir, "meta.json"), "utf8")) };
+      const raw = await this.backend.readMeta();
+      if (raw) this.meta = { ...this.meta, ...JSON.parse(raw) };
     } catch {
-      /* lần chạy đầu tiên */
+      /* meta hỏng thì bắt đầu lại */
     }
     this.prune();
     return this;
@@ -217,9 +219,15 @@ export class Store {
       if (a.day < oldest) {
         this.articles.delete(id);
         this.byUrl.delete(a.url);
+        this.removed.add(`articles/${a.day}`);
       }
     }
-    for (const day of this.digests.keys()) if (day < oldest) this.digests.delete(day);
+    for (const day of this.digests.keys()) {
+      if (day < oldest) {
+        this.digests.delete(day);
+        this.removed.add(`digests/${day}`);
+      }
+    }
     for (const day of Object.keys(this.meta.usage)) if (day < oldest) delete this.meta.usage[day];
     const now = Date.now();
     for (const [url, s] of Object.entries(this.meta.seen)) {
@@ -243,7 +251,7 @@ export class Store {
     this.saveTimer.unref?.();
   }
 
-  /** Ghi các phần đã thay đổi xuống đĩa (ghi ra file tạm rồi đổi tên để tránh hỏng file). */
+  /** Ghi các phần đã thay đổi xuống backend (tuần tự, lỗi thì đánh dấu lại để lần sau ghi tiếp). */
   flush() {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
@@ -251,32 +259,32 @@ export class Store {
     }
     const days = [...this.dirtyDays];
     const digestDays = [...this.dirtyDigests];
+    const removed = [...this.removed];
     const withMeta = this.metaDirty;
-    const payloads = [
-      ...days.map((day) => [
-        this.#file("articles", day),
-        [...this.articles.values()].filter((a) => a.day === day),
-      ]),
-      ...digestDays.map((day) => [this.#file("digests", day), this.digests.get(day) || []]),
-      ...(withMeta ? [[path.join(this.dir, "meta.json"), this.meta]] : []),
-    ].map(([file, data]) => [file, JSON.stringify(data)]);
+    const jobs = [
+      ...days.map((day) => ["articles", day, JSON.stringify([...this.articles.values()].filter((a) => a.day === day))]),
+      ...digestDays.map((day) => ["digests", day, JSON.stringify(this.digests.get(day) || [])]),
+    ];
+    const meta = withMeta ? JSON.stringify(this.meta) : null;
     this.dirtyDays.clear();
     this.dirtyDigests.clear();
+    this.removed.clear();
     this.metaDirty = false;
 
     this.writing = this.writing
       .catch(() => {})
       .then(async () => {
-        for (const [file, json] of payloads) {
-          const tmp = `${file}.${process.pid}.tmp`;
-          await fs.writeFile(tmp, json);
-          await fs.rename(tmp, file);
+        for (const [kind, day, json] of jobs) await this.backend.write(kind, day, json);
+        for (const key of removed) {
+          const [kind, day] = key.split("/");
+          await this.backend.remove(kind, day);
         }
+        if (meta) await this.backend.writeMeta(meta);
       })
       .catch((err) => {
-        // Đánh dấu lại để lần ghi sau thử lại.
         days.forEach((d) => this.dirtyDays.add(d));
         digestDays.forEach((d) => this.dirtyDigests.add(d));
+        removed.forEach((k) => this.removed.add(k));
         if (withMeta) this.metaDirty = true;
         throw err;
       });

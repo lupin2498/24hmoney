@@ -21,7 +21,9 @@ export class HttpClient {
     this.delayMs = delayMs;
     this.concurrency = Math.max(1, concurrency);
     this.retries = retries;
-    this.fetch = fetchImpl || globalThis.fetch;
+    // Gọi qua hàm bọc: trình duyệt yêu cầu fetch chạy với this = window, và trên điện thoại
+    // Capacitor thay thế window.fetch nên phải lấy bản hiện hành mỗi lần gọi.
+    this.fetch = fetchImpl || ((...args) => globalThis.fetch(...args));
     this.active = 0;
     this.waiting = [];
     this.nextStart = 0;
@@ -64,7 +66,7 @@ export class HttpClient {
           throw lastError;
         }
         const text = await readLimited(res, maxBytes);
-        return { url: res.url || url, status: res.status, contentType: res.headers.get("content-type") || "", text };
+        return { url: finalUrl(res.url, url), status: res.status, contentType: res.headers.get("content-type") || "", text };
       } catch (err) {
         if ((err instanceof HttpError && !RETRYABLE(err.status)) || err.code === "TOO_LARGE") throw err;
         lastError = err;
@@ -74,6 +76,17 @@ export class HttpClient {
     }
     throw lastError;
   }
+}
+
+// URL sau chuyển hướng, chỉ dùng khi cùng nguồn với URL yêu cầu (trên điện thoại, fetch đi qua
+// proxy nội bộ của Capacitor nên res.url là địa chỉ proxy chứ không phải trang gốc).
+function finalUrl(responseUrl, requested) {
+  try {
+    if (responseUrl && new URL(responseUrl).origin === new URL(requested).origin) return responseUrl;
+  } catch {
+    /* dùng URL yêu cầu */
+  }
+  return requested;
 }
 
 async function readLimited(res, maxBytes) {
