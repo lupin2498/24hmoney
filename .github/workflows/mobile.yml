@@ -90,10 +90,15 @@ jobs:
         working-directory: mobile/android
         run: ./gradlew --no-daemon assembleRelease -PappVersionCode="$BUILD_NUMBER" -PappVersionName="$APP_VERSION"
 
-      - name: Đặt tên file
+      - name: Đặt tên file và kiểm tra APK
         run: |
           mkdir -p dist
-          cp mobile/android/app/build/outputs/apk/release/app-release.apk "dist/MoneyInsight-$APP_VERSION.apk"
+          APK="dist/MoneyInsight-$APP_VERSION.apk"
+          cp mobile/android/app/build/outputs/apk/release/app-release.apk "$APK"
+          unzip -l "$APK" | grep -E "assets/public/(index.html|bundle.js)"
+          unzip -l "$APK" | grep -q "assets/public/bundle.js"
+          APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner"
+          "$APKSIGNER" verify --verbose "$APK"
           ls -la dist
 
       - uses: actions/upload-artifact@v4
@@ -143,11 +148,16 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build
 
-      - name: Đóng gói IPA
+      - name: Đóng gói và kiểm tra IPA
         run: |
           mkdir -p dist/Payload
           cp -R mobile/ios/App/build/Build/Products/Release-iphoneos/App.app dist/Payload/
-          cd dist && zip -qry "MoneyInsight-$APP_VERSION-unsigned.ipa" Payload && rm -rf Payload && ls -la
+          cd dist
+          IPA="MoneyInsight-$APP_VERSION-unsigned.ipa"
+          zip -qry "$IPA" Payload && rm -rf Payload
+          unzip -l "$IPA" | grep -E "App.app/(App|Info.plist|public/index.html|public/bundle.js)$"
+          unzip -l "$IPA" | grep -q "App.app/public/bundle.js"
+          ls -la
 
       - uses: actions/upload-artifact@v4
         with:
